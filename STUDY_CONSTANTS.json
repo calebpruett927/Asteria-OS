@@ -1,0 +1,9 @@
+{
+  "omega_gates": {
+    "stable": 0.038,
+    "collapse": 0.3
+  },
+  "C_ref": 0.0407,
+  "Ilow": 0.594,
+  "notes": "Thresholds with 95% CIs once data lands."
+}
