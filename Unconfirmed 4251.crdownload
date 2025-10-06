@@ -1,0 +1,14 @@
+[ORBIT]
+ephemeris = DE441
+fit_solver = OrbFit
+weighting = MPC_default
+outlier_policy = 3sigma_clip+manual
+ng_components = A1,A2,A3
+g_law = CO2_tuned
+thermal_lag_tau_days = 0.0
+frame = J2000
+observer = VSOP87/Horizons
+
+[NOTES]
+text = CO2-dominant g(r); set tau_days>0 if seasonal lag is indicated.
+

@@ -1,0 +1,14 @@
+[ORBIT]
+ephemeris = DE441
+fit_solver = OrbFit
+weighting = MPC_default
+outlier_policy = 3sigma_clip+manual
+ng_components = A1,A2,A3
+g_law = Marsden_H2O
+thermal_lag_tau_days = 0.0
+frame = J2000
+observer = VSOP87/Horizons
+
+[NOTES]
+text = Standard Marsden g(r) for H2O sublimation.
+
