@@ -1,4 +1,18 @@
-[package]
-name="asteria-ui"
-version="0.1.0"
-edition="2021"
+# Root: Asteria-OS/Cargo.toml  (virtual workspace)
+[workspace]
+resolver = "2"
+members = [
+  "xtask",
+  "boot",
+  "kernel",
+  "crates/hal",
+  "crates/ui",
+  "crates/hud",
+  "crates/arch-x86_64"
+]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
