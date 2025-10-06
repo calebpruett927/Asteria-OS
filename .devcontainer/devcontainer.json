@@ -1,0 +1,44 @@
+{
+  "name": "AsteriaOS",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bullseye",
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  "mounts": [
+    "type=volume,source=asteria-cargo-cache,target=/home/vscode/.cargo",
+    "type=volume,source=asteria-target-cache,target=${containerWorkspaceFolder}/target"
+  ],
+
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y qemu-system-x86 mtools ovmf jq make && rustup default nightly-2025-09-20 && rustup component add rust-src llvm-tools-preview clippy rustfmt",
+
+  "postStartCommand": "rustc -V && cargo -V",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "ms-vscode.cpptools"
+      ],
+      "settings": {
+        "rust-analyzer.checkOnSave.command": "clippy",
+        "editor.formatOnSave": true,
+        "files.trimTrailingWhitespace": true,
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  "remoteUser": "vscode",
+  "containerUser": "vscode",
+
+  "runArgs": [
+    "--cap-add=SYS_PTRACE",
+    "--security-opt",
+    "seccomp=unconfined"
+  ]
+}
+

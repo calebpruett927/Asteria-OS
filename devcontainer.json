@@ -1,7 +1,0 @@
-{
-  "name": "AsteriaOS",
-  "image": "mcr.microsoft.com/devcontainers/rust:1-bullseye",
-  "features": {"ghcr.io/devcontainers/features/common-utils:2": {}},
-  "postCreateCommand": "rustup default nightly-2025-09-20 && rustup component add rust-src llvm-tools-preview",
-  "customizations": {"vscode": {"extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]}}
-}
