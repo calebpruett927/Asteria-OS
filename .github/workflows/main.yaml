@@ -14,6 +14,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  RUST_TOOLCHAIN: nightly-2025-09-20
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -24,7 +27,7 @@ jobs:
       - name: Set up Rust (nightly pin)
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-09-20
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rust-src, clippy, rustfmt
 
       - name: Cargo fmt (check)
@@ -43,13 +46,19 @@ jobs:
       - name: Set up Rust (nightly pin)
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-09-20
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rust-src, llvm-tools-preview
 
-      - name: Install system packages (QEMU, mtools, jq)
+      - name: Install system packages (QEMU, OVMF, tools)
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 mtools jq
+          sudo apt-get install -y qemu-system-x86 mtools ovmf jq
+
+      - name: Record rustc version
+        id: rustc
+        run: echo "ver=$(rustc -V)" >> "$GITHUB_OUTPUT"
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -58,7 +67,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ steps.rustc.outputs.ver }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -68,47 +77,69 @@ jobs:
       - name: Build kernel crate (devhost stub)
         run: cargo build -p asteria-kernel --release
 
-      - name: Hexagram HUD — Weld Summary
+      - name: Hexagram HUD — Weld & Study Summary
         id: hud
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
           if [ -f manifests/REPRO_MANIFEST.json ]; then
-            sha=$(sha256sum manifests/REPRO_MANIFEST.json | awk '{print $1}')
-            echo "$sha" > dist/MANIFEST_SHA256.txt
+            msha=$(sha256sum manifests/REPRO_MANIFEST.json | awk '{print $1}')
+            echo "$msha" > dist/MANIFEST_SHA256.txt
             tol=$(jq -r '.tol // empty' manifests/REPRO_MANIFEST.json)
             res=$(jq -r '.residual // empty' manifests/REPRO_MANIFEST.json)
             weld_id=$(jq -r '.weld_id // empty' manifests/REPRO_MANIFEST.json)
             seed=$(jq -r '.seed // empty' manifests/REPRO_MANIFEST.json)
 
-            echo "weld_id=$weld_id" >> $GITHUB_OUTPUT
-            echo "tol=$tol" >> $GITHUB_OUTPUT
-            echo "residual=$res" >> $GITHUB_OUTPUT
-            echo "seed=$seed" >> $GITHUB_OUTPUT
+            echo "weld_id=$weld_id" >> "$GITHUB_OUTPUT"
+            echo "tol=$tol" >> "$GITHUB_OUTPUT"
+            echo "residual=$res" >> "$GITHUB_OUTPUT"
+            echo "seed=$seed" >> "$GITHUB_OUTPUT"
 
             {
-              echo "## Hexagram HUD — Weld Summary";
-              echo "";
-              echo "- weld_id: **$weld_id**";
-              echo "- s/tol: **$res / $tol**";
-              echo "- seed: **$seed**";
-              echo "- manifest_sha256: **$sha**";
-            } >> $GITHUB_STEP_SUMMARY
+              echo "## Hexagram HUD — Weld Summary"
+              echo ""
+              echo "- weld_id: **$weld_id**"
+              echo "- s/tol: **$res / $tol**"
+              echo "- seed: **$seed**"
+              echo "- manifest_sha256: **$msha**"
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No manifests/REPRO_MANIFEST.json found" | tee dist/HUD_WARN.txt
           fi
 
+          # Optional: study constants (works for minimal or enriched schema)
+          if [ -f manifests/STUDY_CONSTANTS.json ]; then
+            sc_sha=$(sha256sum manifests/STUDY_CONSTANTS.json | awk '{print $1}')
+            stable=$(jq -r '.omega_gates.stable.value // .omega_gates.stable // empty' manifests/STUDY_CONSTANTS.json)
+            collapse=$(jq -r '.omega_gates.collapse.value // .omega_gates.collapse // empty' manifests/STUDY_CONSTANTS.json)
+            {
+              echo "- study_constants_sha256: **$sc_sha**"
+              if [ -n "${stable:-}" ] && [ -n "${collapse:-}" ]; then
+                echo "- ω gates: stable=$stable, collapse=$collapse"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Package artifacts
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
           echo "Asteria OS build artifacts" > dist/README.txt
           cp Cargo.lock dist/ 2>/dev/null || true
           cp -r manifests dist/manifests 2>/dev/null || true
-          tar -C target/release -czf dist/target-release.tgz . || true
+
+          # Prefer host target for devhost; if you later emit x86_64-unknown-none, include that.
+          if [ -d target/x86_64-unknown-none/release ]; then
+            tar -C target/x86_64-unknown-none/release -czf dist/target-release.tgz . || true
+          else
+            tar -C target/release -czf dist/target-release.tgz . || true
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: asteria-dist-${{ github.run_number }}
           path: dist
+          retention-days: 7
