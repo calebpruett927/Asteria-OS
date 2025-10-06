@@ -1,0 +1,10 @@
+FIG-7 — Close Approach Analysis for C/2025 N1 (ATLAS)
+
+Close Approaches: Earth=none, Mars=none (SBDB 3σ filters applied)
+Hyperbolic kinematics (from osculating elements):
+  a = −0.2639 AU
+  v_inf = 58.0 km s⁻¹
+  v_q   = 68.3 km s⁻¹
+
+Table status: header-only (no CA rows). Time basis: CA `cd`=TDB; planners=UTC (kept explicit).
+Optional completeness: add SBDB ca-data for Juptr/Satrn; if empty, document “none listed”.

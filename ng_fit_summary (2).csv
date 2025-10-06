@@ -1,0 +1,3 @@
+epoch_tdb,solver,weighting,g_law,tau_days,A1,A1_sigma,A2,A2_sigma,A3,A3_sigma,RMS_arcsec,N_obs,notes
+2025-10-06T00:00Z,OrbFit,MPC_default,Marsden_H2O,0,0,0,0,0,0,0,0.4125,420,gravity-only baseline; RMS from 2e-6 rad
+2025-10-06T00:00Z,OrbFit,MPC_default,CO2_tuned,5,0,0,0,0,0,0,0.2063,420,NG candidate tested; ΔBIC=+82.693 vs baseline; not adopted

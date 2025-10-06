@@ -1,0 +1,1 @@
+ΔBIC=+82.7 → NG disfavored; adopt grav-only; A1–A3 fixed to 0. RMS in arcsec (converted from radians). BIC vs gravity-only; NG adds three parameters. Adoption threshold: ΔBIC ≤ −10 and station-stable.

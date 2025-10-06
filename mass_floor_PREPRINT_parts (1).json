@@ -1,0 +1,34 @@
+{
+  "per_species": [
+    {
+      "species": "CO2",
+      "mass_per_molecule_kg": 7.30637189304e-26,
+      "mdot_kg_s": 124.20832218168,
+      "sigma_kg_s": 0.7306371893040001
+    },
+    {
+      "species": "CO",
+      "mass_per_molecule_kg": 4.64950938648e-26,
+      "mdot_kg_s": 17.203184729975998,
+      "sigma_kg_s": 0.929901877296
+    },
+    {
+      "species": "H2O",
+      "mass_per_molecule_kg": 2.98897031988e-26,
+      "mdot_kg_s": 6.6654038133324,
+      "sigma_kg_s": 0.2391176255904
+    },
+    {
+      "species": "OCS",
+      "mass_per_molecule_kg": 9.9748581730662e-26,
+      "mdot_kg_s": 0.1695725889421254,
+      "sigma_kg_s": 0.08977372355759579
+    }
+  ],
+  "total": {
+    "mdot_kg_s": 148.24648331393053,
+    "sigma_kg_s": 1.2098697302197707
+  },
+  "assumed_v_ej_m_s": 440.0,
+  "assumed_v_ej_sigma_m_s": 44.0
+}
