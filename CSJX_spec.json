@@ -1,0 +1,52 @@
+{
+  "D_mm": 10.0,
+  "S_opt": 4.0,
+  "freq_Hz": 150.0,
+  "cavity_ID_mm": 40.0,
+  "cavity_depth_mm": 25.0,
+  "diaphragm": {
+    "type": "voice_coil",
+    "active_diameter_mm": 40.0,
+    "stroke_mm": 3.0,
+    "resonance_Hz": 200.0
+  },
+  "liners": {
+    "A_viscoelastic": {
+      "material": "silicone/PU",
+      "thickness_mm": 2.0,
+      "tan_delta_150Hz": 0.2,
+      "tau_M_s_range": [
+        0.1,
+        0.3
+      ]
+    },
+    "B_PCM": {
+      "material": "microencap paraffin C28 in silicone",
+      "thickness_mm_range": [
+        0.15,
+        0.4
+      ],
+      "alpha_m2_per_s": 1e-07,
+      "tau_T_s_range": [
+        0.2,
+        1.6
+      ],
+      "heater_bias": "optional"
+    }
+  },
+  "sensors": {
+    "pressure_kPa_range": [
+      -5,
+      5
+    ],
+    "thrust_N_range": [
+      0,
+      1
+    ],
+    "anemometer_m_per_s": [
+      0,
+      20
+    ]
+  },
+  "seed": 417
+}
