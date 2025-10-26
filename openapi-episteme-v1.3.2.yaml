@@ -1,0 +1,197 @@
+openapi: 3.1.1
+info:
+  title: Episteme Copilot — Weld/Audit API
+  version: "1.3.2"
+  description: >
+    Implements contract-bound RCFT audit grammar: Δκ = R·τR − (D_ω + D_C), I = e^κ.
+    Ensures κ-continuity, weld validation, HUD rendering, manifest-bound ledger entry,
+    and full AX-0 audit compatibility with Episteme Construction.
+    Grammar: Contract → Canon → Closures → Integrity Ledger → Stance.
+    AX-0: Only that which returns through collapse is real.
+  x-gpt-id: g-68e5715bae148191b69d54a517597655
+  x-canonical-directory: https://github.com/calebpruett927/Asteria-OS
+  x-canonical-manifest: https://episteme-api.paulus.systems/manifest.json
+  x-return-link: https://episteme-api.paulus.systems/.well-known/episteme.json
+
+servers:
+  - url: https://episteme-api.paulus.systems/v1
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    Contract:
+      type: object
+      properties:
+        p: { type: number, example: 0.92 }
+        alpha: { type: number, example: 1.0 }
+        epsilon: { type: number, example: 0.005 }
+        K: { type: integer, example: 4 }
+        lambda_decay: { type: number, example: 0.12 }
+        tol: { type: number, example: 0.005 }
+        gates:
+          type: object
+          properties:
+            stable: { type: number, example: 0.038 }
+            watch_hi: { type: number, example: 0.30 }
+
+    Invariants:
+      type: object
+      properties:
+        omega: { type: number }
+        C: { type: number }
+        tauR: { type: number }
+        kappa: { type: number }
+        F: { type: number }
+        S: { type: number }
+
+    Weld:
+      type: object
+      properties:
+        weld_id: { type: string }
+        t0: { $ref: '#/components/schemas/Invariants' }
+        t1: { $ref: '#/components/schemas/Invariants' }
+        delta_kappa: { type: number }
+        I_ratio: { type: number }
+        residual: { type: number }
+        pass: { type: boolean }
+
+    AuditRow:
+      type: object
+      properties:
+        subset: { type: string }
+        kappa: { type: number }
+        I: { type: number }
+        It1_over_It0: { type: number }
+        delta_kappa: { type: number }
+        D_omega: { type: number }
+        D_C: { type: number }
+        R: { type: number, nullable: true }
+        tauR: { type: number, nullable: true }
+        residual: { type: number }
+        weld_id: { type: string }
+        created: { type: string, format: date-time }
+        manifest_root_hash: { type: string }
+
+paths:
+  /cycles/evaluate:
+    post:
+      summary: Evaluate seam for κ-budget compliance
+      operationId: evaluateCycle
+      tags: [budget]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                contract: { $ref: '#/components/schemas/Contract' }
+                t0: { $ref: '#/components/schemas/Invariants' }
+                t1: { $ref: '#/components/schemas/Invariants' }
+                measured_credit: { type: number, nullable: true }
+      responses:
+        '200':
+          description: Δκ result and AX-0 verdict
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  delta_kappa: { type: number }
+                  D_omega: { type: number }
+                  D_C: { type: number }
+                  credit_R_tauR: { type: number }
+                  residual: { type: number }
+                  I_ratio: { type: number }
+                  ax0_pass: { type: boolean }
+
+  /welds/validate:
+    post:
+      summary: Validate residual and caption seam
+      operationId: validateWeld
+      tags: [weld]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                weld_id: { type: string }
+                delta_kappa: { type: number }
+                residual: { type: number }
+                tol: { type: number }
+                ci68:
+                  type: object
+                  properties:
+                    lo: { type: number }
+                    hi: { type: number }
+      responses:
+        '200':
+          description: Validation + caption string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pass: { type: boolean }
+                  caption_line: { type: string }
+
+  /welds/hud:
+    post:
+      summary: Render HUD payload and printable caption
+      operationId: renderHUD
+      tags: [weld]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                weld_id: { type: string }
+                delta_kappa: { type: number }
+                I_ratio: { type: number }
+                kappa: { type: number }
+                I: { type: number }
+                residual: { type: number }
+                seed: { type: integer }
+                sha256: { type: string }
+                tol: { type: number }
+                manifest_root_hash: { type: string }
+      responses:
+        '200':
+          description: HUD + formatted caption
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hud: { $ref: '#/components/schemas/Weld' }
+                  printable: { type: string }
+
+  /auditrow/submit:
+    post:
+      summary: Append validated audit row to manifest ledger
+      operationId: submitAuditRow
+      tags: [audit]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuditRow' }
+      responses:
+        '200':
+          description: Weld stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stored: { type: boolean }
+                  weld_id: { type: string }
