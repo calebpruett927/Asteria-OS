@@ -1,0 +1,6 @@
+/episteme_api/
+├── main.py           # FastAPI app
+├── openapi.yaml      # The schema file (already built)
+├── models.py         # Pydantic models (from schemas)
+├── routes.py         # API routes like /cycles/evaluate
+├── requirements.txt  # FastAPI + Uvicorn
