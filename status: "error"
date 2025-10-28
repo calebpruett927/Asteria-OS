@@ -1,0 +1,416 @@
+from typing import Any, Optional, List, Dict
+import copy
+import logging
+
+# Assumed present elsewhere in module:
+# async def make_nws_request(url: str) -> Optional[dict[str, Any]]: ...
+# async def _fetch_nws_with_cache(url: str, ttl: int = 300) -> Optional[dict[str, Any]]: ...
+# def format_alert(feature: dict) -> str: ...
+# US_STATE_CODES = {...}
+# NWS_API_BASE = "https://api.weather.gov"
+# logger = logging.getLogger(...)
+# mcp = FastMCP(...) or equivalent
+
+# -------------------------
+# Deep selection helpers
+# -------------------------
+
+def _normalize_selectors(selectors: Optional[List[str]]) -> List[List[str]]:
+    """
+    Normalize a list of dotted selector strings into a list of token lists.
+    Example: ["features.properties.headline", "properties"] -> [["features","properties","headline"], ["properties"]]
+    """
+    if not selectors:
+        return []
+    if not isinstance(selectors, list):
+        raise TypeError("selectors must be a list of strings")
+    out: List[List[str]] = []
+    for s in selectors:
+        if not isinstance(s, str) or not s.strip():
+            raise TypeError("each selector must be a non-empty string")
+        tokens = [t for t in (part.strip() for part in s.split(".")) if t != ""]
+        if not tokens:
+            raise TypeError("each selector must contain at least one token")
+        out.append(tokens)
+    return out
+
+
+def _add_path(result: Dict[str, Any], payload: Any, tokens: List[str]) -> None:
+    """
+    Add the path described by tokens from payload into result.
+    This mutates `result`.
+    - If tokens length == 1, the whole payload[token] is copied into result[token].
+    - If payload[token] is a dict and tokens remain, recurse.
+    - If payload[token] is a list and tokens remain, apply to each element (if dict).
+    - If payload doesn't contain the key, noop.
+    """
+    if not tokens:
+        return
+    key = tokens[0]
+    if not isinstance(payload, dict) or key not in payload:
+        # nothing to do
+        return
+
+    val = payload[key]
+    # If this selector terminates here -> copy the whole node (override any partial)
+    if len(tokens) == 1:
+        result[key] = copy.deepcopy(val)
+        return
+
+    # Need to descend
+    rest = tokens[1:]
+
+    # If val is dict, recurse into it
+    if isinstance(val, dict):
+        sub = result.get(key)
+        # If sub already exists and is not dict (e.g., full copy from other selector), keep it as full node.
+        if sub is None or isinstance(sub, dict):
+            if sub is None:
+                result[key] = {}
+            # recurse
+            _add_path(result[key], val, rest)
+        else:
+            # result[key] is non-dict (full node); do nothing because full node already present
+            return
+        return
+
+    # If val is list, apply selection to each element (when possible)
+    if isinstance(val, list):
+        new_list: List[Any] = []
+        for item in val:
+            if isinstance(item, dict):
+                new_item: Dict[str, Any] = {}
+                _add_path(new_item, item, rest)
+                new_list.append(new_item)
+            else:
+                # item is not a dict: no nested keys to select -> cannot descend, skip or keep item?
+                # We'll append the raw item only if rest is empty (but rest is not empty here), so append nothing.
+                # To keep structure length consistent, append None (or {}); choose {} for clarity.
+                new_list.append({})  # consistent filtered item
+        result[key] = new_list
+        return
+
+    # scalar and tokens remain -> can't descend
+    return
+
+
+def _deep_filter(payload: Optional[Dict[str, Any]], selectors: Optional[List[str]]) -> Optional[Dict[str, Any]]:
+    """
+    Return a new dict containing only the selected dotted paths from payload.
+    If selectors is None or empty, returns the original payload (deepcopied).
+    If payload is None, returns None.
+
+    Example:
+        payload = {"properties": {"periods": [...]}, "features": [...]}
+        selectors = ["properties.periods", "features.properties.headline"]
+        -> returns { "properties": {"periods": [...]}, "features": [ {"properties": {"headline": "..."}}, ... ] }
+    """
+    if payload is None:
+        return None
+    if not selectors:
+        # full copy for safety
+        return copy.deepcopy(payload)
+
+    # validate and normalize
+    try:
+        token_lists = _normalize_selectors(selectors)
+    except TypeError as exc:
+        raise
+
+    result: Dict[str, Any] = {}
+    for tokens in token_lists:
+        _add_path(result, payload, tokens)
+
+    return result
+
+# -------------------------
+# Updated tools
+# -------------------------
+
+@mcp.tool()
+async def get_alerts(
+    state: str,
+    *,
+    ttl: int = 300,
+    summary_only: bool = False,
+    max_alerts: int = 20,
+    include_raw_when_summary: bool = True,
+    raw_keys: Optional[List[str]] = None
+) -> dict[str, Any]:
+    """
+    Get weather alerts for a US state with deep raw selection support.
+
+    raw_keys: Optional list of dotted selectors for the raw payload, e.g.:
+      ["features", "properties.severity", "features.properties.headline"]
+    """
+    code = (state or "").strip().upper()
+    if len(code) != 2 or code not in US_STATE_CODES:
+        return {"status": "error", "message": f"Invalid US state code: '{state}'. Use a two-letter postal code (e.g., CA, NY)."}
+
+    # Validate raw_keys
+    if raw_keys is not None:
+        if not isinstance(raw_keys, list) or not all(isinstance(k, str) for k in raw_keys):
+            return {"status": "error", "message": "raw_keys must be a list of dotted selector strings."}
+
+    url = f"{NWS_API_BASE}/alerts/active/area/{code}"
+    logger.info("Fetching state alerts: %s (TTL=%ss)", url, ttl)
+    data = await _fetch_nws_with_cache(url, ttl=ttl)
+
+    if data is None:
+        return {"status": "error", "state": code, "message": "Unable to fetch alerts (network or upstream failure)."}
+
+    features = data.get("features")
+    if features is None:
+        base = {"status": "ok", "state": code, "count": 0, "alerts": [], "alerts_text": [], "message": "No alert information returned by NWS."}
+        if not summary_only or include_raw_when_summary:
+            base["raw"] = _deep_filter(data, raw_keys) if include_raw_when_summary else copy.deepcopy(data)
+        return base
+
+    if not features:
+        base = {"status": "ok", "state": code, "count": 0, "alerts": [], "alerts_text": [], "message": f"No active alerts for {code}."}
+        if not summary_only or include_raw_when_summary:
+            base["raw"] = _deep_filter(data, raw_keys) if include_raw_when_summary else copy.deepcopy(data)
+        return base
+
+    # Respect max_alerts to keep responses bounded
+    features = features[: max(0, int(max_alerts))]
+
+    if summary_only:
+        # Compact summary: limited fields for each alert
+        alerts_summary = []
+        for feature in features:
+            props = feature.get("properties", {})
+            alerts_summary.append({
+                "id": feature.get("id"),
+                "event": props.get("event"),
+                "severity": props.get("severity"),
+                "areaDesc": props.get("areaDesc"),
+                "onset": props.get("onset"),
+                "ends": props.get("ends"),
+                "headline": props.get("headline"),
+            })
+        resp = {
+            "status": "ok",
+            "state": code,
+            "count": len(alerts_summary),
+            "alerts_summary": alerts_summary,
+            "message": f"Compact summary for {code}.",
+        }
+        if include_raw_when_summary:
+            resp["raw"] = _deep_filter(data, raw_keys)
+        return resp
+
+    # Full structured response
+    structured_alerts: List[Dict[str, Any]] = []
+    text_alerts: List[str] = []
+
+    for feature in features:
+        fid = feature.get("id")
+        props = feature.get("properties", {})
+
+        s = {
+            "id": fid,
+            "event": props.get("event"),
+            "headline": props.get("headline"),
+            "areaDesc": props.get("areaDesc"),
+            "severity": props.get("severity"),
+            "certainty": props.get("certainty"),
+            "urgency": props.get("urgency"),
+            "senderName": props.get("senderName"),
+            "onset": props.get("onset"),
+            "ends": props.get("ends"),
+            "description": props.get("description"),
+            "instruction": props.get("instruction"),
+            "parameters": props.get("parameters"),
+        }
+
+        structured_alerts.append(s)
+        text_alerts.append(format_alert(feature))
+
+    # For full responses, if raw_keys provided, filter; otherwise return full raw
+    raw_payload = _deep_filter(data, raw_keys) if raw_keys is not None else copy.deepcopy(data)
+
+    return {
+        "status": "ok",
+        "state": code,
+        "count": len(structured_alerts),
+        "alerts": structured_alerts,
+        "alerts_text": text_alerts,
+        "raw": raw_payload,
+    }
+
+
+@mcp.tool()
+async def get_forecast(
+    latitude: float,
+    longitude: float,
+    *,
+    periods: int = 5,
+    ttl: int = 300,
+    summary_only: bool = False,
+    include_raw_when_summary: bool = True,
+    raw_keys: Optional[List[str]] = None,
+    raw_point_keys: Optional[List[str]] = None
+) -> dict[str, Any]:
+    """
+    Get weather forecast for a location with recursive deep selection for raw payloads.
+
+    raw_keys: selectors for forecast raw payload (dotted paths)
+    raw_point_keys: selectors for point payload (dotted paths)
+    """
+    # Validate numeric inputs
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (TypeError, ValueError):
+        return {"status": "error", "message": "Invalid latitude/longitude: numeric values required."}
+
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return {"status": "error", "message": "Latitude must be -90..90 and longitude -180..180."}
+
+    # Validate selectors
+    if raw_keys is not None:
+        if not isinstance(raw_keys, list) or not all(isinstance(k, str) for k in raw_keys):
+            return {"status": "error", "message": "raw_keys must be a list of dotted selector strings."}
+    if raw_point_keys is not None:
+        if not isinstance(raw_point_keys, list) or not all(isinstance(k, str) for k in raw_point_keys):
+            return {"status": "error", "message": "raw_point_keys must be a list of dotted selector strings."}
+
+    # Cap periods to avoid huge payloads
+    periods = max(1, min(20, int(periods)))
+
+    logger.info("Fetching forecast for %f,%f (periods=%d, ttl=%ds)", lat, lon, periods, ttl)
+
+    points_url = f"{NWS_API_BASE}/points/{lat},{lon}"
+    points_data = await _fetch_nws_with_cache(points_url, ttl=ttl)
+    if points_data is None:
+        return {"status": "error", "lat": lat, "lon": lon, "message": "Unable to fetch point metadata from NWS."}
+
+    props = points_data.get("properties", {})
+    forecast_url = props.get("forecast") or props.get("forecastHourly") or props.get("forecastGridData")
+    if not forecast_url:
+        base = {"status": "error", "lat": lat, "lon": lon, "message": "No forecast endpoint available for that location.", "point": props}
+        if summary_only and include_raw_when_summary:
+            base["raw_point"] = _deep_filter(points_data, raw_point_keys)
+        return base
+
+    forecast_data = await _fetch_nws_with_cache(forecast_url, ttl=ttl)
+    if forecast_data is None:
+        base = {"status": "error", "lat": lat, "lon": lon, "forecast_url": forecast_url, "message": "Unable to fetch forecast data."}
+        if summary_only and include_raw_when_summary:
+            base["raw_point"] = _deep_filter(points_data, raw_point_keys)
+        return base
+
+    fprops = forecast_data.get("properties", {})
+    periods_list = fprops.get("periods")
+    if not isinstance(periods_list, list):
+        # If NWS returned a grid or unfamiliar shape, handle summary_only with optional raw
+        if summary_only:
+            resp = {
+                "status": "ok",
+                "lat": lat,
+                "lon": lon,
+                "point_url": points_url,
+                "forecast_url": forecast_url,
+                "periods_returned": 0,
+                "periods_summary": [],
+                "message": "Forecast payload did not include 'periods' list. Use forecastHourly or examine raw payload."
+            }
+            if include_raw_when_summary:
+                resp["raw"] = _deep_filter(forecast_data, raw_keys)
+                resp["raw_point"] = _deep_filter(points_data, raw_point_keys)
+            return resp
+
+        return {
+            "status": "ok",
+            "lat": lat,
+            "lon": lon,
+            "point_url": points_url,
+            "forecast_url": forecast_url,
+            "periods_returned": 0,
+            "periods": [],
+            "raw": _deep_filter(forecast_data, raw_keys) if raw_keys is not None else copy.deepcopy(forecast_data),
+            "message": "Forecast payload did not include 'periods' list. Use forecastHourly or examine raw payload."
+        }
+
+    # Build period entries
+    if summary_only:
+        periods_summary = []
+        for p in periods_list[:periods]:
+            periods_summary.append({
+                "name": p.get("name"),
+                "temperature": p.get("temperature"),
+                "temperatureUnit": p.get("temperatureUnit"),
+                "shortForecast": p.get("shortForecast"),
+            })
+        # Friendly location name
+        location_name = None
+        rel_loc = props.get("relativeLocation")
+        if isinstance(rel_loc, dict):
+            city = rel_loc.get("properties", {}).get("city")
+            state = rel_loc.get("properties", {}).get("state")
+            if city and state:
+                location_name = f"{city}, {state}"
+            else:
+                location_name = city or state
+
+        resp = {
+            "status": "ok",
+            "lat": lat,
+            "lon": lon,
+            "point_url": points_url,
+            "forecast_url": forecast_url,
+            "location": location_name,
+            "periods_returned": len(periods_summary),
+            "periods_summary": periods_summary,
+            "message": f"Compact forecast for {lat},{lon} (next {len(periods_summary)} periods)."
+        }
+        if include_raw_when_summary:
+            resp["raw"] = _deep_filter(forecast_data, raw_keys)
+            resp["raw_point"] = _deep_filter(points_data, raw_point_keys)
+        return resp
+
+    # Full structured periods (non-summary)
+    out_periods: List[Dict[str, Any]] = []
+    for p in periods_list[:periods]:
+        entry = {
+            "id": p.get("number"),
+            "name": p.get("name"),
+            "startTime": p.get("startTime"),
+            "endTime": p.get("endTime"),
+            "temperature": p.get("temperature"),
+            "temperatureUnit": p.get("temperatureUnit"),
+            "windSpeed": p.get("windSpeed"),
+            "windDirection": p.get("windDirection"),
+            "shortForecast": p.get("shortForecast"),
+            "detailedForecast": p.get("detailedForecast"),
+            "isDaytime": p.get("isDaytime"),
+        }
+        out_periods.append(entry)
+
+    # Friendly location name
+    location_name = None
+    rel_loc = props.get("relativeLocation")
+    if isinstance(rel_loc, dict):
+        city = rel_loc.get("properties", {}).get("city")
+        state = rel_loc.get("properties", {}).get("state")
+        if city and state:
+            location_name = f"{city}, {state}"
+        else:
+            location_name = city or state
+
+    # full response: filtered raw forecast if raw_keys provided; include raw_point only if raw_point_keys provided
+    resp = {
+        "status": "ok",
+        "lat": lat,
+        "lon": lon,
+        "point_url": points_url,
+        "forecast_url": forecast_url,
+        "location": location_name,
+        "periods_returned": len(out_periods),
+        "periods": out_periods,
+        "raw": _deep_filter(forecast_data, raw_keys) if raw_keys is not None else copy.deepcopy(forecast_data),
+    }
+    if raw_point_keys is not None:
+        resp["raw_point"] = _deep_filter(points_data, raw_point_keys)
+    return resp
