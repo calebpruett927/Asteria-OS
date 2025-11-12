@@ -1,54 +1,32 @@
-# Asteria OS
+# Collapse Audit API — Edge Harness
 
-A small, research-grade operating system scaffold written in Rust. Boots under QEMU, renders a framebuffer UI, and ships a **Hexagram HUD** that displays integrity telemetry — **I≡e^κ**, drift **ω**, and weld status (**residual/tol**) — using simple JSON manifests. The repo includes a GitHub Actions build, a devcontainer for Codespaces, and a modular workspace (kernel, HAL, UI, HUD). Designed to grow from first pixels to timers, input, scheduler, IPC, and full UMCP/RCFT logic.
+## Purpose
+This repo contains a declarative, standards-conformant YAML specification of epistemic edge cases within the Collapse Integrity Audit Stack. It defines formal examples and `x-tests` to preserve, simulate, or validate corner-case behavior under audit.
 
-## Quickstart
-
-Prereqs (Codespaces already has most bits):
-```bash
-rustup default nightly-2025-09-20
-rustup component add rust-src llvm-tools-preview clippy rustfmt
-sudo apt-get update && sudo apt-get install -y qemu-system-x86 mtools make
+## Structure
+```
+/
+├── schema/
+│   └── collapse_audit_edge_harness.yaml    # Self-contained OpenAPI 3.1.1 schema with embedded test logic
+│
+├── tests/
+│   ├── runner.py                           # Optional (planned) test runner
+│   └── harness.json                        # Extracted test vector format (if needed)
+│
+└── README.md                               # This document
 ```
 
-Build + run (devhost stub, compiles on any Linux CI):
-```bash
-cargo build -p asteria-kernel --release
-./target/release/asteria-kernel
-```
+## Included Edge Tests
+| ID   | Summary                                  | Case Type            |
+|------|------------------------------------------|----------------------|
+| EC1  | Zero Drift, Infinite Return              | Typed censor block   |
+| EC2  | Wall-Hugging Curvature Amplification     | Amplified sensitivity|
+| EC3  | Symbolic Gate Mismatch                   | Logic gate fail      |
+| EC4  | Systemic Integrity Decay in Chain        | Cumulative decay     |
+| EC5  | Stale Contract Reuse Without Weld        | Weld enforcement     |
+| EC6  | Oscillatory Return, Not Exact            | Return ambiguity     |
+| EC7  | Mixed Face Policies                      | Face conflict        |
 
-For OS bring-up (UEFI QEMU path), disable the `devhost` feature later and follow `boot/` + `xtask/` instructions.
+## License
+Epistemic protocol governed by return legality, not distribution constraints. Schema free to clone, fork, weld, or extend.
 
-## Workspace layout
-```
-asteria-os/
-├─ README.md
-├─ LICENSE-MIT / LICENSE-APACHE
-├─ .github/workflows/main.yaml
-├─ .devcontainer/devcontainer.json
-├─ Cargo.toml            # workspace
-├─ rust-toolchain.toml   # nightly pin
-├─ Makefile, qemu-run.sh
-├─ boot/                 # boot (devhost stub now; UEFI later)
-├─ kernel/               # devhost binary; OS entry under no_std
-├─ crates/
-│  ├─ hal/               # framebuffer, clock (stubs compile)
-│  ├─ ui/                # painter, widgets (stubs compile)
-│  ├─ hud/               # HUD overlay (stub compile; OS-mode later)
-│  └─ arch-x86_64/       # interrupts stubs
-├─ xtask/                # build orchestration (placeholder)
-└─ manifests/
-   ├─ REPRO_MANIFEST.json
-   └─ STUDY_CONSTANTS.json
-```
-
-## Hexagram HUD & Governance
-The HUD shows: I, κ (I≡e^κ), ω, and weld s/tol. Configuration lives in `manifests/`.
-
-## Roadmap
-- Bitmap font + text
-- Bump allocator + `alloc` in HUD
-- Timer IRQ → real uptime/FPS
-- UEFI image assembly in `xtask` + artifact upload
-- Input + widgets; graph ω over time
-- `crates/logic/` to compute (I, κ, ω, weld ok) for HUD
