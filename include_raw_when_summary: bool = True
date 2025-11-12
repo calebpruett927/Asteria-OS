@@ -1,0 +1,293 @@
+from typing import Any
+import logging
+
+# --- assumed helpers/constants exist earlier in module ---
+# async def make_nws_request(url: str) -> Optional[dict[str, Any]]: ...
+# def format_alert(feature: dict) -> str: ...
+# async def _fetch_nws_with_cache(url: str, ttl: int = 300) -> Optional[dict[str, Any]]: ...
+# US_STATE_CODES = {...}
+# NWS_API_BASE = "https://api.weather.gov"
+# logger = logging.getLogger(...)
+# --------------------------------------------------------
+
+@mcp.tool()
+async def get_alerts(
+    state: str,
+    *,
+    ttl: int = 300,
+    summary_only: bool = False,
+    max_alerts: int = 20,
+    include_raw_when_summary: bool = True
+) -> dict[str, Any]:
+    """
+    Get weather alerts for a US state (structured JSON), with optional compact summary.
+
+    Args:
+      state: Two-letter US state code (e.g. CA, NY)
+      ttl: Cache TTL in seconds for the NWS request (default 300s)
+      summary_only: If True, return a compact summary (no full structured alerts)
+      max_alerts: Maximum number of alerts to include in the response (default 20)
+      include_raw_when_summary: If True and summary_only is True, include the raw NWS payload.
+
+    Returns:
+      JSON-serializable dict. If summary_only is True and include_raw_when_summary is False
+      the response omits the 'raw' field.
+    """
+    code = (state or "").strip().upper()
+    if len(code) != 2 or code not in US_STATE_CODES:
+        return {"status": "error", "message": f"Invalid US state code: '{state}'. Use a two-letter postal code (e.g., CA, NY)."}
+
+    url = f"{NWS_API_BASE}/alerts/active/area/{code}"
+    logger.info("Fetching state alerts: %s (TTL=%ss)", url, ttl)
+    data = await _fetch_nws_with_cache(url, ttl=ttl)
+
+    if data is None:
+        return {"status": "error", "state": code, "message": "Unable to fetch alerts (network or upstream failure)."}
+
+    features = data.get("features")
+    if features is None:
+        base = {"status": "ok", "state": code, "count": 0, "alerts": [], "alerts_text": [], "message": "No alert information returned by NWS."}
+        if not summary_only or include_raw_when_summary:
+            base["raw"] = data
+        return base
+
+    if not features:
+        base = {"status": "ok", "state": code, "count": 0, "alerts": [], "alerts_text": [], "message": f"No active alerts for {code}."}
+        if not summary_only or include_raw_when_summary:
+            base["raw"] = data
+        return base
+
+    # Respect max_alerts to keep responses bounded
+    features = features[: max(0, int(max_alerts))]
+
+    if summary_only:
+        # Compact summary: limited fields for each alert (no full structured alerts)
+        alerts_summary = []
+        for feature in features:
+            props = feature.get("properties", {})
+            alerts_summary.append({
+                "id": feature.get("id"),
+                "event": props.get("event"),
+                "severity": props.get("severity"),
+                "areaDesc": props.get("areaDesc"),
+                "onset": props.get("onset"),
+                "ends": props.get("ends"),
+                "headline": props.get("headline"),
+            })
+        resp = {
+            "status": "ok",
+            "state": code,
+            "count": len(alerts_summary),
+            "alerts_summary": alerts_summary,
+            "message": f"Compact summary for {code}.",
+        }
+        if include_raw_when_summary:
+            resp["raw"] = data
+        return resp
+
+    # Full structured response
+    structured_alerts: list[dict[str, Any]] = []
+    text_alerts: list[str] = []
+
+    for feature in features:
+        fid = feature.get("id")
+        props = feature.get("properties", {})
+
+        s = {
+            "id": fid,
+            "event": props.get("event"),
+            "headline": props.get("headline"),
+            "areaDesc": props.get("areaDesc"),
+            "severity": props.get("severity"),
+            "certainty": props.get("certainty"),
+            "urgency": props.get("urgency"),
+            "senderName": props.get("senderName"),
+            "onset": props.get("onset"),
+            "ends": props.get("ends"),
+            "description": props.get("description"),
+            "instruction": props.get("instruction"),
+            "parameters": props.get("parameters"),
+        }
+
+        structured_alerts.append(s)
+        text_alerts.append(format_alert(feature))
+
+    return {
+        "status": "ok",
+        "state": code,
+        "count": len(structured_alerts),
+        "alerts": structured_alerts,
+        "alerts_text": text_alerts,
+        "raw": data,
+    }
+
+
+@mcp.tool()
+async def get_forecast(
+    latitude: float,
+    longitude: float,
+    *,
+    periods: int = 5,
+    ttl: int = 300,
+    summary_only: bool = False,
+    include_raw_when_summary: bool = True
+) -> dict[str, Any]:
+    """
+    Get weather forecast for a location (structured JSON), with optional compact summary.
+
+    Args:
+      latitude: Latitude of the location (-90..90)
+      longitude: Longitude of the location (-180..180)
+      periods: How many forecast periods to return (default 5). Will be capped to 20.
+      ttl: Cache TTL in seconds for NWS requests (default 300s)
+      summary_only: If True, return a compact 'periods_summary' (no full periods)
+      include_raw_when_summary: If True and summary_only True, include the raw NWS payload.
+
+    Returns:
+      JSON-serializable dict. If summary_only is True and include_raw_when_summary is False
+      the response omits the 'raw' field.
+    """
+    # Validate numeric inputs
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (TypeError, ValueError):
+        return {"status": "error", "message": "Invalid latitude/longitude: numeric values required."}
+
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return {"status": "error", "message": "Latitude must be -90..90 and longitude -180..180."}
+
+    # Cap periods to avoid huge payloads
+    periods = max(1, min(20, int(periods)))
+
+    logger.info("Fetching forecast for %f,%f (periods=%d, ttl=%ds)", lat, lon, periods, ttl)
+
+    points_url = f"{NWS_API_BASE}/points/{lat},{lon}"
+    points_data = await _fetch_nws_with_cache(points_url, ttl=ttl)
+    if points_data is None:
+        return {"status": "error", "lat": lat, "lon": lon, "message": "Unable to fetch point metadata from NWS."}
+
+    props = points_data.get("properties", {})
+    forecast_url = props.get("forecast") or props.get("forecastHourly") or props.get("forecastGridData")
+    if not forecast_url:
+        base = {"status": "error", "lat": lat, "lon": lon, "message": "No forecast endpoint available for that location.", "point": props}
+        if summary_only and include_raw_when_summary:
+            base["raw_point"] = points_data
+        return base
+
+    forecast_data = await _fetch_nws_with_cache(forecast_url, ttl=ttl)
+    if forecast_data is None:
+        base = {"status": "error", "lat": lat, "lon": lon, "forecast_url": forecast_url, "message": "Unable to fetch forecast data."}
+        if summary_only and include_raw_when_summary:
+            base["raw_point"] = points_data
+        return base
+
+    fprops = forecast_data.get("properties", {})
+    periods_list = fprops.get("periods")
+    if not isinstance(periods_list, list):
+        # If NWS returned a grid or unfamiliar shape, handle summary_only with optional raw
+        if summary_only:
+            resp = {
+                "status": "ok",
+                "lat": lat,
+                "lon": lon,
+                "point_url": points_url,
+                "forecast_url": forecast_url,
+                "periods_returned": 0,
+                "periods_summary": [],
+                "message": "Forecast payload did not include 'periods' list. Use forecastHourly or examine raw payload."
+            }
+            if include_raw_when_summary:
+                resp["raw"] = forecast_data
+                resp["raw_point"] = points_data
+            return resp
+
+        return {
+            "status": "ok",
+            "lat": lat,
+            "lon": lon,
+            "point_url": points_url,
+            "forecast_url": forecast_url,
+            "periods_returned": 0,
+            "periods": [],
+            "raw": forecast_data,
+            "message": "Forecast payload did not include 'periods' list. Use forecastHourly or examine raw payload."
+        }
+
+    # Build period entries
+    if summary_only:
+        periods_summary = []
+        for p in periods_list[:periods]:
+            periods_summary.append({
+                "name": p.get("name"),
+                "temperature": p.get("temperature"),
+                "temperatureUnit": p.get("temperatureUnit"),
+                "shortForecast": p.get("shortForecast"),
+            })
+        # Friendly location name
+        location_name = None
+        rel_loc = props.get("relativeLocation")
+        if isinstance(rel_loc, dict):
+            city = rel_loc.get("properties", {}).get("city")
+            state = rel_loc.get("properties", {}).get("state")
+            if city and state:
+                location_name = f"{city}, {state}"
+            else:
+                location_name = city or state
+
+        resp = {
+            "status": "ok",
+            "lat": lat,
+            "lon": lon,
+            "point_url": points_url,
+            "forecast_url": forecast_url,
+            "location": location_name,
+            "periods_returned": len(periods_summary),
+            "periods_summary": periods_summary,
+            "message": f"Compact forecast for {lat},{lon} (next {len(periods_summary)} periods)."
+        }
+        if include_raw_when_summary:
+            resp["raw"] = forecast_data
+            resp["raw_point"] = points_data
+        return resp
+
+    # Full structured periods
+    out_periods: list[dict[str, Any]] = []
+    for p in periods_list[:periods]:
+        entry = {
+            "id": p.get("number"),
+            "name": p.get("name"),
+            "startTime": p.get("startTime"),
+            "endTime": p.get("endTime"),
+            "temperature": p.get("temperature"),
+            "temperatureUnit": p.get("temperatureUnit"),
+            "windSpeed": p.get("windSpeed"),
+            "windDirection": p.get("windDirection"),
+            "shortForecast": p.get("shortForecast"),
+            "detailedForecast": p.get("detailedForecast"),
+            "isDaytime": p.get("isDaytime"),
+        }
+        out_periods.append(entry)
+
+    # Friendly location name
+    location_name = None
+    rel_loc = props.get("relativeLocation")
+    if isinstance(rel_loc, dict):
+        city = rel_loc.get("properties", {}).get("city")
+        state = rel_loc.get("properties", {}).get("state")
+        if city and state:
+            location_name = f"{city}, {state}"
+        else:
+            location_name = city or state
+
+    return {
+        "status": "ok",
+        "lat": lat,
+        "lon": lon,
+        "point_url": points_url,
+        "forecast_url": forecast_url,
+        "location": location_name,
+        "periods_returned": len(out_periods),
+        "periods": out_periods,
+        "raw": forecast_data,
+    }

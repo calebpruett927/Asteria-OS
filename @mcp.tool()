@@ -1,0 +1,167 @@
+import time
+import logging
+from typing import Any, Optional
+
+# Simple in-process TTL cache for NWS responses.
+# Keyed by request URL -> (expiry_ts, data)
+_NWS_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
+
+logger = logging.getLogger("weather_tools")
+logging.basicConfig(level=logging.INFO)
+
+US_STATE_CODES = {
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS",
+    "KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY",
+    "NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV",
+    "WI","WY","DC","PR"
+}
+
+def _get_cached(url: str, ttl: int) -> Optional[dict[str, Any]]:
+    """Return cached payload if fresh, else None."""
+    entry = _NWS_CACHE.get(url)
+    if not entry:
+        return None
+    expiry, payload = entry
+    if time.time() > expiry:
+        # stale
+        _NWS_CACHE.pop(url, None)
+        return None
+    return payload
+
+def _set_cache(url: str, payload: dict[str, Any] | None, ttl: int) -> None:
+    expiry = time.time() + float(ttl)
+    _NWS_CACHE[url] = (expiry, payload)
+
+async def _fetch_nws_with_cache(url: str, ttl: int = 300) -> Optional[dict[str, Any]]:
+    """Fetch an NWS URL with a small TTL cache to reduce repeated hits."""
+    cached = _get_cached(url, ttl)
+    if cached is not None:
+        logger.debug("Cache HIT for %s", url)
+        return cached
+    logger.debug("Cache MISS for %s — requesting", url)
+    data = await make_nws_request(url)
+    _set_cache(url, data, ttl)
+    return data
+
+# ---- Tools ----
+
+@mcp.tool()
+async def get_alerts(state: str, *, ttl: int = 300) -> str:
+    """
+    Get weather alerts for a US state.
+
+    Args:
+        state: Two-letter US state code (e.g. CA, NY)
+        ttl: Cache TTL in seconds for the NWS request (default 300s)
+    Returns:
+        A readable string of alerts, or a helpful error/status message.
+    """
+    if not isinstance(state, str):
+        return "Invalid state code: must be a two-letter string (e.g., 'CA')."
+
+    code = state.strip().upper()
+    if len(code) != 2 or code not in US_STATE_CODES:
+        return f"Invalid US state code: '{state}'. Use a two-letter postal code (e.g., CA, NY)."
+
+    url = f"{NWS_API_BASE}/alerts/active/area/{code}"
+    logger.info("Fetching state alerts: %s (TTL=%ss)", url, ttl)
+    data = await _fetch_nws_with_cache(url, ttl=ttl)
+
+    if not data:
+        return "Unable to fetch alerts (network or upstream failure)."
+
+    features = data.get("features")
+    if features is None:
+        return "No alert information returned by NWS."
+
+    if not features:
+        return f"No active alerts for {code}."
+
+    # Build a readable output, include a short header
+    header = f"Active alerts for {code} — count: {len(features)}\n"
+    formatted = [format_alert(feature) for feature in features]
+    return header + "\n---\n".join(formatted)
+
+
+@mcp.tool()
+async def get_forecast(latitude: float, longitude: float, *, periods: int = 5, ttl: int = 300) -> str:
+    """
+    Get weather forecast for a location.
+
+    Args:
+        latitude: Latitude of the location (-90..90)
+        longitude: Longitude of the location (-180..180)
+        periods: How many forecast periods to return (default 5)
+        ttl: Cache TTL in seconds for NWS requests (default 300s)
+
+    Returns:
+        Readable short forecast for the next `periods` periods or an error message.
+    """
+    # Validate inputs
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (TypeError, ValueError):
+        return "Invalid latitude/longitude: numeric values required."
+
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return "Latitude must be -90..90 and longitude -180..180."
+
+    periods = int(periods) if periods and int(periods) > 0 else 5
+    logger.info("Fetching forecast for %f,%f (periods=%d, ttl=%ds)", lat, lon, periods, ttl)
+
+    points_url = f"{NWS_API_BASE}/points/{lat},{lon}"
+    points_data = await _fetch_nws_with_cache(points_url, ttl=ttl)
+    if not points_data:
+        return "Unable to fetch point metadata from NWS."
+
+    props = points_data.get("properties", {})
+    # prefer standard forecast, fall back to hourly if requested or if missing
+    forecast_url = props.get("forecast") or props.get("forecastHourly") or props.get("forecastGridData")
+    if not forecast_url:
+        return "No forecast endpoint available for that location."
+
+    forecast_data = await _fetch_nws_with_cache(forecast_url, ttl=ttl)
+    if not forecast_data:
+        return "Unable to fetch forecast data."
+
+    # guard: forecast payload shapes differ; try to find periods list
+    periods_list = None
+    fprops = forecast_data.get("properties", {})
+    # common shape for the 'forecast' endpoint:
+    if isinstance(fprops.get("periods"), list):
+        periods_list = fprops["periods"]
+    # some endpoints name it differently — try nested keys
+    elif isinstance(fprops.get("periods"), list):
+        periods_list = fprops["periods"]
+    else:
+        # fallback: maybe it's a grid dataset (not human periods). Inform user.
+        return "Forecast available but not in 'periods' format; try `forecastHourly` or a different endpoint."
+
+    if not periods_list:
+        return "No forecast periods found."
+
+    # Format the next N periods
+    out_lines = []
+    for p in periods_list[:periods]:
+        name = p.get("name", "Unknown")
+        temp = p.get("temperature")
+        temp_unit = p.get("temperatureUnit", "")
+        wind = p.get("windSpeed", "N/A")
+        wind_dir = p.get("windDirection", "N/A")
+        short = p.get("shortForecast") or p.get("detailedForecast", "")
+        detail = p.get("detailedForecast", "")
+        # Assemble a compact entry
+        entry = (
+            f"{name}:\n"
+            f"  Temperature: {temp}{('°' + temp_unit) if temp is not None else ' N/A'}\n"
+            f"  Wind: {wind} {wind_dir}\n"
+            f"  Forecast: {short}\n"
+        )
+        # Optionally include a brief detailed sentence if available (keeps output friendly)
+        if detail:
+            entry += f"\n  {detail.strip()}\n"
+        out_lines.append(entry)
+
+    header = f"Forecast for {lat},{lon} — showing next {min(periods, len(periods_list))} periods\nSource: {forecast_url}\n\n"
+    return header + "\n---\n".join(out_lines)
