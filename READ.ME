@@ -1,0 +1,31 @@
+# Collapse Audit API — Edge Harness
+
+## Purpose
+This repo contains a declarative, standards-conformant YAML specification of epistemic edge cases within the Collapse Integrity Audit Stack. It defines formal examples and `x-tests` to preserve, simulate, or validate corner-case behavior under audit.
+
+## Structure
+```
+/
+├── schema/
+│   └── collapse_audit_edge_harness.yaml    # Self-contained OpenAPI 3.1.1 schema with embedded test logic
+│
+├── tests/
+│   ├── runner.py                           # Optional (planned) test runner
+│   └── harness.json                        # Extracted test vector format (if needed)
+│
+└── README.md                               # This document
+```
+
+## Included Edge Tests
+| ID   | Summary                                  | Case Type            |
+|------|------------------------------------------|----------------------|
+| EC1  | Zero Drift, Infinite Return              | Typed censor block   |
+| EC2  | Wall-Hugging Curvature Amplification     | Amplified sensitivity|
+| EC3  | Symbolic Gate Mismatch                   | Logic gate fail      |
+| EC4  | Systemic Integrity Decay in Chain        | Cumulative decay     |
+| EC5  | Stale Contract Reuse Without Weld        | Weld enforcement     |
+| EC6  | Oscillatory Return, Not Exact            | Return ambiguity     |
+| EC7  | Mixed Face Policies                      | Face conflict        |
+
+## License
+Epistemic protocol governed by return legality, not distribution constraints. Schema free to clone, fork, weld, or extend.
